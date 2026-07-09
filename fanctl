@@ -1,0 +1,98 @@
+#!/bin/bash
+set -euo pipefail
+
+CMD=${1:-status}
+VAL=${2:-}
+
+FANCTL_DIR="$(dirname "$(readlink -f "$0")")"
+
+usage() {
+    echo "Usage: fanctl <command> [value]"
+    echo ""
+    echo "Commands:"
+    echo "  <0-100>          Set fan speed to N%"
+    echo "  auto             Restore automatic BMC fan control"
+    echo "  status           Show current fan RPM & temp"
+    echo "  night            Enable systemd night mode (23:00 → 10%)"
+    echo "  day              Disable systemd night mode (back to auto)"
+    echo ""
+    echo "Examples:"
+    echo "  fanctl 10        # quiet night mode"
+    echo "  fanctl auto      # give control back to BMC"
+    echo "  fanctl status    # check temps & fans"
+    exit 1
+}
+
+pct_to_hex() {
+    local pct=$1
+    if [ "$pct" -lt 0 ] || [ "$pct" -gt 100 ]; then
+        echo "Error: percentage must be 0–100" >&2
+        exit 1
+    fi
+    printf '0x%02x' "$pct"
+}
+
+set_fan_pct() {
+    local pct=$1
+    local hex
+    hex=$(pct_to_hex "$pct")
+    ipmitool raw 0x3a 0x01 "$hex" "$hex" "$hex" "$hex" "$hex" "$hex" "$hex" "$hex" > /dev/null
+    echo "→ Fans set to ${pct}%"
+}
+
+set_auto() {
+    ipmitool raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 > /dev/null
+    echo "→ Automatic BMC fan control restored"
+}
+
+show_status() {
+    echo "=== Fans ==="
+    ipmitool sdr list 2>/dev/null | grep -i fan
+    echo ""
+    echo "=== Temperatures ==="
+    ipmitool sdr type temperature 2>/dev/null
+}
+
+enable_night_mode() {
+    local unitdir=/etc/systemd/system
+    cp "$FANCTL_DIR/systemd/quiet-night.service" "$unitdir/"
+    cp "$FANCTL_DIR/systemd/quiet-night.timer" "$unitdir/"
+    cp "$FANCTL_DIR/systemd/loud-day.service" "$unitdir/"
+    cp "$FANCTL_DIR/systemd/loud-day.timer" "$unitdir/"
+    systemctl daemon-reload
+    systemctl enable --now quiet-night.timer loud-day.timer
+    systemctl start quiet-night
+    echo "→ Night mode enabled (23:00→10%, 07:00→auto)"
+}
+
+disable_night_mode() {
+    systemctl disable --now quiet-night.timer loud-day.timer 2>/dev/null || true
+    systemctl stop quiet-night loud-day 2>/dev/null || true
+    set_auto
+    echo "→ Night mode disabled, BMC auto control restored"
+}
+
+case "$CMD" in
+    auto)
+        set_auto
+        ;;
+    status)
+        show_status
+        ;;
+    night)
+        enable_night_mode
+        ;;
+    day)
+        disable_night_mode
+        ;;
+    --help|-h)
+        usage
+        ;;
+    *)
+        if [[ "$CMD" =~ ^[0-9]+$ ]]; then
+            set_fan_pct "$CMD"
+        else
+            usage
+        fi
+        ;;
+esac

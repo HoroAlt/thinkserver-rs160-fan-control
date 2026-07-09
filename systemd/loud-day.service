@@ -1,0 +1,7 @@
+[Unit]
+Description=Restore automatic fan control (day mode)
+
+[Service]
+Type=oneshot
+ExecStart=ipmitool raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+RemainAfterExit=yes
