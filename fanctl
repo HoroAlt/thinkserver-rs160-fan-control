@@ -4,7 +4,11 @@ set -euo pipefail
 CMD=${1:-status}
 VAL=${2:-}
 
-FANCTL_DIR="$(dirname "$(readlink -f "$0")")"
+FANCTL_DIR="/usr/local/lib/fanctl-systemd"
+
+if [ ! -d "$FANCTL_DIR" ]; then
+    FANCTL_DIR="$(dirname "$(readlink -f "$0")")"
+fi
 
 usage() {
     echo "Usage: fanctl <command> [value]"
