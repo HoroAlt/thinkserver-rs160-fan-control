@@ -60,7 +60,7 @@ No cron, no config. Comes back after reboot. Disable with:
 fanctl day
 ```
 
-## For hackers — roll your own
+## Going further
 
 Check the [`examples/`](examples/) directory:
 
