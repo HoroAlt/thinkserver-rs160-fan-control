@@ -1,0 +1,16 @@
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  bash-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n
+        run: |
+          set -e
+          for f in $(find . -name '*.sh' -not -path './.git/*') fanctl; do
+            bash -n "$f"
+          done
