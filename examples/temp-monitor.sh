@@ -1,15 +1,4 @@
 #!/bin/bash
-# Simple temperature-aware fan control
-# Saves you from melting your CPU while keeping noise low.
-#
-# Usage: run as a oneshot from cron every minute, or as a daemon.
-#
-#   crontab -e
-#   * * * * * /usr/local/bin/temp-monitor.sh
-#
-# Or run in a loop (ctrl+c to stop):
-#   while true; do ./temp-monitor.sh; sleep 30; done
-
 set -euo pipefail
 
 TEMP_IDLE=45
