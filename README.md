@@ -87,3 +87,7 @@ All fans settle at ~3000–3100 RPM. CPU idle 40–45°C.
 - Manual mode **does not ramp up under load**. Don't set below 10% and walk away.
 - Resets on BMC reboot (power cycle, firmware update, `mc reset cold`).
 - OEM command, undocumented. Your call.
+
+## License
+
+[MIT](LICENSE) — do what you want, just keep the copyright notice.
