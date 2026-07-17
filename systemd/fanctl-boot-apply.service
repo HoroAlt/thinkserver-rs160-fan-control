@@ -1,0 +1,11 @@
+[Unit]
+Description=Re-apply last manual fan mode after boot
+After=multi-user.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/fanctl restore
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

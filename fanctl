@@ -1,16 +1,25 @@
 #!/bin/bash
+# ponytail: set_pct / auto_cmd are duplicated in examples/temp-monitor.sh
+# and examples/per-channel.sh (3 lines each). Keep them in sync. Lifting
+# to a sourced lib would force examples to depend on install.sh, which
+# README says they don't — net cost is higher than net benefit.
 set -euo pipefail
 CMD=${1:-status}
 FANCTL_DIR="/usr/local/lib/fanctl-systemd"
 [ -d "$FANCTL_DIR" ] || FANCTL_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
-die() { echo "fanctl: $*" >&2; exit 1; }
+STATE_DIR="${FANCTL_STATE_DIR:-/var/lib/fanctl}"
+STATE_FILE="$STATE_DIR/mode"
+
+die()  { echo "fanctl: $*" >&2; exit 1; }
+warn() { echo "fanctl: $*" >&2; }
+
 usage() {
     cat <<EOF
 Usage: $0 <command>
 
 Commands:
-  <0-100>        Set fan speed to N% (all channels)
+  <1-100>        Set fan speed to N% (all channels)
   max            Set fans to 100%
   half           Set fans to 50%
   auto           Restore automatic BMC fan control
@@ -18,6 +27,7 @@ Commands:
   watch          Watchdog: hand to BMC auto on critical CPU temp
   night          Enable systemd night mode (23:00 → 10%, 07:00 → auto)
   day            Disable systemd night mode
+  restore        Re-apply last manual mode (used by boot unit)
 
 Examples:
   $0 max         # 100%
@@ -26,40 +36,54 @@ Examples:
   $0 10          # quiet mode
   $0 watch       # safety net: ramp on heat, revert on critical
 EOF
-    exit 1
 }
 
 auto_cmd() {
     ipmitool raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 >/dev/null
+    save_mode auto
     echo "→ BMC auto fan control restored"
 }
+
 pct_cmd() {
-    [ "$1" -le 100 ] || die "0–100 only"
-    local h=$(printf '0x%02x' "$1")
+    [ "$1" -ge 1 ] && [ "$1" -le 100 ] || die "1–100 only (use 'auto' for BMC control)"
+    local h
+    h=$(printf '0x%02x' "$1")
     ipmitool raw 0x3a 0x01 "$h" "$h" "$h" "$h" "$h" "$h" "$h" "$h" >/dev/null
+    save_mode "$1"
     echo "→ Fans set to ${1}%"
+}
+
+save_mode() {
+    [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || return 0
+    [ -w "$STATE_DIR" ] || return 0
+    printf '%s\n' "$1" > "$STATE_FILE"
+}
+
+cpu_temp_max() {
+    ipmitool sdr type temperature 2>/dev/null | \
+        grep -iE 'cpu' | \
+        sed -nE 's/.*\| *([0-9]{1,3}) degrees.*/\1/p' | \
+        sort -rn | head -1
 }
 
 case "$CMD" in
     auto)   auto_cmd ;;
     max)    pct_cmd 100 ;;
     half)   pct_cmd 50 ;;
-    status) echo "=== Fans ==="; ipmitool sdr list 2>/dev/null | grep -i fan
+    status) echo "=== Fans ===";       ipmitool sdr list 2>/dev/null | grep -i fan
             echo; echo "=== Temperatures ==="; ipmitool sdr type temperature 2>/dev/null ;;
     watch)  interval=${WATCH_INTERVAL:-10}
             crit=${WATCH_CRIT:-85}
             echo "fanctl watch: polling CPU every ${interval}s, ≥${crit}°C→auto. Ctrl-C to stop."
             while :; do
-                temp=$(ipmitool sdr type temperature 2>/dev/null | \
-                       grep -i cpu | head -1 | \
-                       sed 's/.*| *\([0-9]\{1,3\}\) degrees.*/\1/')
+                temp=$(cpu_temp_max || true)
                 if [ -z "$temp" ]; then
-                    echo "fanctl watch: temp read failed — handing to auto for safety"
+                    warn "temp read failed — handing to auto for safety"
                     auto_cmd
                     exit 1
                 fi
                 if [ "$temp" -ge "$crit" ]; then
-                    echo "fanctl watch: ${temp}°C ≥ ${crit}°C critical — handing to BMC auto"
+                    warn "${temp}°C ≥ ${crit}°C critical — handing to BMC auto"
                     auto_cmd
                     exit 1
                 fi
@@ -74,6 +98,16 @@ case "$CMD" in
     day)    systemctl disable --now quiet-night.timer loud-day.timer 2>/dev/null || true
             systemctl stop quiet-night loud-day 2>/dev/null || true
             auto_cmd ;;
-    -h|--help) usage ;;
-    *)      if [[ "$CMD" =~ ^[0-9]+$ ]]; then pct_cmd "$CMD"; else usage; fi ;;
+    restore) if [ ! -f "$STATE_FILE" ]; then
+                echo "fanctl restore: no saved mode (file $STATE_FILE missing)"
+                exit 0
+             fi
+             mode=$(cat "$STATE_FILE" 2>/dev/null || true)
+             case "$mode" in
+                 auto)  auto_cmd ;;
+                 ""|*[!0-9]*)  warn "saved mode '$mode' is not numeric or 'auto'" ;;
+                 *)     pct_cmd "$mode" ;;
+             esac ;;
+    -h|--help) usage; exit 0 ;;
+    *)      if [[ "$CMD" =~ ^[0-9]+$ ]]; then pct_cmd "$CMD"; else usage; exit 1; fi ;;
 esac
