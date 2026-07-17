@@ -35,17 +35,3 @@ Different speeds per fan — let FAN2 run faster if it's near CPU, while keeping
 ./per-channel.sh  10 30 10
 # FAN1=10%  FAN2=30%  FAN3=10%
 ```
-
-## DIY via cron / systemd (any language)
-
-The IPMI command is just:
-
-```bash
-# set 10%
-ipmitool raw 0x3a 0x01 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a
-
-# restore auto
-ipmitool raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
-```
-
-Wrap it in a Python/Go/Rust script, or a one-liner in cron — your call.
