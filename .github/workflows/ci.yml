@@ -13,6 +13,6 @@ jobs:
       - name: bash -n
         run: |
           set -e
-          for f in $(find . -name '*.sh' -not -path './.git/*'); do
+          for f in $(find . -name '*.sh' -not -path './.git/*') fanctl; do
             bash -n "$f"
           done
