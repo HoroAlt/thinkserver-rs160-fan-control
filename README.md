@@ -41,6 +41,8 @@ sudo ipmitool raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
 ```bash
 sudo ./install.sh          # copies fanctl + systemd units to /usr/local
 fanctl 10                  # set 10%
+fanctl max                 # set 100%
+fanctl half                # set 50%
 fanctl auto                # back to BMC
 fanctl status              # show RPM + temps
 ```
