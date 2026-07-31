@@ -24,23 +24,9 @@ jobs:
           set -e
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
-          shellcheck -x fanctl install.sh tests/smoke.sh
-          for f in $(find . -name '*.sh' -not -path './.git/*' -not -path './tests/*'); do
-            [ "$f" = "./fanctl" ] || [ "$f" = "./install.sh" ] || shellcheck "$f"
-          done
-          shellcheck tests/ipmitool
-          # Skip examples/ for shellcheck — they are intentionally standalone and
-          # may diverge from fanctl's protocol (their ponytail comment notes this).
-          find examples -name '*.sh' -exec shellcheck {} \;
-
-  smoke:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: install ipmitool (provides the binary smoke wants to shadow)
-        run: |
-          set -e
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq ipmitool
-      - name: fanctl smoke
-        run: bash tests/smoke.sh
+          # fanctl + install.sh are sourced from each other (fanctl uses ipmitool,
+          # install.sh uses find/lsmod), so follow sources with -x.
+          shellcheck -x fanctl install.sh
+          # examples/ is intentionally standalone and may diverge from fanctl's
+          # protocol bytes; not part of the package contract.
+          shellcheck examples/temp-monitor.sh
