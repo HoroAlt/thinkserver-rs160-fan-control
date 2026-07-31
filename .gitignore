@@ -1,6 +1,8 @@
-.DS_Store
+# Build artefacts / state
+*.tmp
 *.swp
 *.bak
 *~
+.DS_Store
 .idea/
 .vscode/

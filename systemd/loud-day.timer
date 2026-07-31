@@ -1,5 +1,5 @@
 [Unit]
-Description=Day mode start at 07:00
+Description=Day-mode trigger (07:00) — restore automatic fan control
 
 [Timer]
 OnCalendar=07:00

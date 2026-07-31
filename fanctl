@@ -1,113 +1,228 @@
 #!/bin/bash
-# ponytail: set_pct / auto_cmd are duplicated in examples/temp-monitor.sh
-# and examples/per-channel.sh (3 lines each). Keep them in sync. Lifting
-# to a sourced lib would force examples to depend on install.sh, which
-# README says they don't — net cost is higher than net benefit.
+# fanctl — IPMI fan control for Lenovo ThinkServer RS160 (ASPEED AST2400 BMC).
+# Uses ASRock Rack OEM NetFn 0x3a. Tested on BMC 1.36 / 2.50 / 3.20.
 set -euo pipefail
-CMD=${1:-status}
-FANCTL_DIR="/usr/local/lib/fanctl-systemd"
-[ -d "$FANCTL_DIR" ] || FANCTL_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 
+VERSION="1.3.0"
+PROG="${0##*/}"
+
+# ----- arg parsing: pull -n/--dry-run out before command dispatch -----
+DRY_RUN=0
+ARGS=()
+for a in "$@"; do
+    case "$a" in
+        -n|--dry-run) DRY_RUN=1 ;;
+        *)            ARGS+=("$a") ;;
+    esac
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
+
+CMD="${1:-status}"
+[ "$#" -gt 0 ] && shift
+
+# ----- paths -----
 STATE_DIR="${FANCTL_STATE_DIR:-/var/lib/fanctl}"
 STATE_FILE="$STATE_DIR/mode"
 
-die()  { echo "fanctl: $*" >&2; exit 1; }
-warn() { echo "fanctl: $*" >&2; }
+# Sourced only for the help/message display; the systemd service substitutes
+# NIGHT_PCT itself via EnvironmentFile=/etc/default/fanctl.
+SCHEDULE_FILE=/etc/default/fanctl
+NIGHT_PCT=10
+# shellcheck disable=SC1090
+[ -r "$SCHEDULE_FILE" ] && . "$SCHEDULE_FILE"
+
+die()  { echo "$PROG: $*" >&2; exit 1; }
+warn() { echo "$PROG: $*" >&2; }
 
 usage() {
     cat <<EOF
-Usage: $0 <command>
+$PROG v$VERSION — quiet fans on Lenovo ThinkServer RS160 via IPMI
+
+Usage: $PROG [OPTIONS] <command> [args]
 
 Commands:
-  <1-100>        Set fan speed to N% (all channels)
-  max            Set fans to 100%
-  half           Set fans to 50%
-  auto           Restore automatic BMC fan control
-  status         Show current fan RPM & temp
-  watch          Watchdog: hand to BMC auto on critical CPU temp
-  night          Enable systemd night mode (23:00 → 10%, 07:00 → auto)
-  day            Disable systemd night mode
-  restore        Re-apply last manual mode (used by boot unit)
+  <1-100>         Set all fans to N percent (e.g. \`$PROG 10\` = quiet, \`50\` = half)
+  set <1-100>     Same as above, more explicit
+  auto            Restore automatic (BMC) fan control
+  max             Set fans to 100 percent
+  half            Set fans to 50 percent
+  per-channel <p0> [p1] ... [p7]
+                   Set each of up to 8 channels. Each value: 0 = auto for that
+                   channel, 1-100 = manual percent. Unspecified channels = 100.
+  status          Show fan RPM and temperatures as a table
+  watch           Watchdog: hand control back to BMC on critical CPU temp
+                  Reads \$WATCH_INTERVAL (default 10s), \$WATCH_CRIT (default 85)
+  night           Enable systemd night mode (uses \$NIGHT_PCT from
+                  $SCHEDULE_FILE; default 10 percent)
+  day             Disable systemd night mode
+  restore         Re-apply last manual mode (used by boot-restore unit)
+
+Options:
+  -n, --dry-run   Print the ipmitool command, do not execute; no side effects
+  -V, --version   Print version and exit
+  -h, --help      This help
 
 Examples:
-  $0 max         # 100%
-  $0 half        # 50%
-  $0 auto        # BMC back in control
-  $0 10          # quiet mode
-  $0 watch       # safety net: ramp on heat, revert on critical
+  $PROG 10                 # all fans at 10 percent
+  $PROG set 25             # explicit form
+  $PROG -n 10              # show what would be sent for 10 percent
+  $PROG per-channel 10 30 10        # FAN1=10 FAN2=30 FAN3=10, rest 100
+  $PROG per-channel 10 30 10 0 0 0 0 0   # FAN3 auto via channel 4 onwards
+  $PROG watch              # safety net: revert to auto at critical temp
+
+Edit $SCHEDULE_FILE (created by install.sh) to change \$NIGHT_PCT without
+reinstalling. Schedule *times* (23:00 / 07:00) live in the .timer units.
 EOF
 }
 
-auto_cmd() {
-    ipmitool raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 >/dev/null
-    save_mode auto
-    echo "→ BMC auto fan control restored"
+# ----- low-level BMC I/O -----
+
+# run_ipmi <args...>: dispatch to ipmitool unless dry-run
+# ponytail: redirect of ipmitool output to /dev/null lives inside this function
+# so dry-run printf at the call site isn't suppressed by `>/dev/null`.
+run_ipmi() {
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '[dry-run] ipmitool'
+        local a
+        for a in "$@"; do printf ' %q' "$a"; done
+        printf '\n'
+        return 0
+    fi
+    ipmitool "$@" >/dev/null
 }
 
+# auto_cmd: hand control back to BMC
+auto_cmd() {
+    run_ipmi raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+    if [ "$DRY_RUN" -eq 0 ]; then
+        save_mode auto
+        echo "→ BMC auto fan control restored"
+    fi
+}
+
+# pct_cmd <n>: set all 8 channels to n percent (1..100)
 pct_cmd() {
     [ "$1" -ge 1 ] && [ "$1" -le 100 ] || die "1–100 only (use 'auto' for BMC control)"
     local h
     h=$(printf '0x%02x' "$1")
-    ipmitool raw 0x3a 0x01 "$h" "$h" "$h" "$h" "$h" "$h" "$h" "$h" >/dev/null
-    save_mode "$1"
-    echo "→ Fans set to ${1}%"
+    run_ipmi raw 0x3a 0x01 "$h" "$h" "$h" "$h" "$h" "$h" "$h" "$h"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        save_mode "$1"
+        echo "→ Fans set to ${1}%"
+    fi
 }
 
+# per_channel_cmd <p0>..<p7>: set each channel separately; 0..100; 0 = auto
+per_channel_cmd() {
+    [ "$#" -ge 1 ] && [ "$#" -le 8 ] || die "per-channel needs 1..8 percentages (got $#)"
+    local v bytes=()
+    for v in "$@"; do
+        case "$v" in
+            *[!0-9]*) die "per-channel: '$v' is not a number" ;;
+            *)        [ "$v" -ge 0 ] && [ "$v" -le 100 ] || die "per-channel: '$v' must be 0..100" ;;
+        esac
+        bytes+=("$(printf '0x%02x' "$v")")
+    done
+    while [ "${#bytes[@]}" -lt 8 ]; do
+        bytes+=("$(printf '0x%02x' 100)")
+    done
+    run_ipmi raw 0x3a 0x01 "${bytes[@]}"
+    if [ "$DRY_RUN" -eq 0 ]; then
+        save_mode "per-channel:$#:$*"
+        echo "→ Per-channel set: $*"
+    fi
+}
+
+# save_mode: persist for boot-restore.
+# Atomic write (mktemp+mv); silent on permission denied (cron-style deploys).
+# ponytail: single state file, no global lock; sufficient for one BMC + one operator.
 save_mode() {
     [ -d "$STATE_DIR" ] || mkdir -p "$STATE_DIR" 2>/dev/null || return 0
     [ -w "$STATE_DIR" ] || return 0
-    printf '%s\n' "$1" > "$STATE_FILE"
+    local tmp
+    tmp=$(mktemp "$STATE_FILE.XXXXXX" 2>/dev/null) || return 0
+    if printf '%s\n' "$1" > "$tmp" 2>/dev/null && mv "$tmp" "$STATE_FILE" 2>/dev/null; then
+        :
+    else
+        rm -f "$tmp" 2>/dev/null || true
+    fi
 }
 
-cpu_temp_max() {
-    ipmitool sdr type temperature 2>/dev/null | \
-        grep -iE 'cpu' | \
-        sed -nE 's/.*\| *([0-9]{1,3}) degrees.*/\1/p' | \
-        sort -rn | head -1
+# ----- status / table -----
+# SDR lines have inconsistent column counts across ipmitool versions and BMC
+# firmware (sdr list is "name | reading | state", sdr type temperature adds
+# extra columns for sensor ID and nominal value). We don't try to reformat —
+# just trim leading whitespace and let ipmitool's own layout speak for itself.
+print_status() {
+    echo "=== Fans ==="
+    ipmitool sdr list 2>/dev/null | awk '/[Ff][Aa][Nn][0-9]/ { sub(/^[ \t]+/, "  "); print }'
+    echo
+    echo "=== Temperatures ==="
+    ipmitool sdr type temperature 2>/dev/null | awk '/^[[:space:]]*[A-Z]/ { sub(/^[ \t]+/, "  "); print }'
 }
 
+# ----- main dispatch -----
 case "$CMD" in
-    auto)   auto_cmd ;;
-    max)    pct_cmd 100 ;;
-    half)   pct_cmd 50 ;;
-    status) echo "=== Fans ===";       ipmitool sdr list 2>/dev/null | grep -i fan
-            echo; echo "=== Temperatures ==="; ipmitool sdr type temperature 2>/dev/null ;;
-    watch)  interval=${WATCH_INTERVAL:-10}
-            crit=${WATCH_CRIT:-85}
-            echo "fanctl watch: polling CPU every ${interval}s, ≥${crit}°C→auto. Ctrl-C to stop."
-            while :; do
-                temp=$(cpu_temp_max || true)
-                if [ -z "$temp" ]; then
-                    warn "temp read failed — handing to auto for safety"
-                    auto_cmd
-                    exit 1
-                fi
-                if [ "$temp" -ge "$crit" ]; then
-                    warn "${temp}°C ≥ ${crit}°C critical — handing to BMC auto"
-                    auto_cmd
-                    exit 1
-                fi
-                sleep "$interval"
-            done ;;
-    night)  [[ -d "$FANCTL_DIR/systemd" ]] || die "systemd units not found — run install.sh first"
-            cp "$FANCTL_DIR"/systemd/*.service "$FANCTL_DIR"/systemd/*.timer /etc/systemd/system/
-            systemctl daemon-reload
-            systemctl enable --now quiet-night.timer loud-day.timer
-            systemctl start quiet-night
-            echo "→ Night mode on (23:00 → 10%, 07:00 → auto)" ;;
-    day)    systemctl disable --now quiet-night.timer loud-day.timer 2>/dev/null || true
-            systemctl stop quiet-night loud-day 2>/dev/null || true
-            auto_cmd ;;
-    restore) if [ ! -f "$STATE_FILE" ]; then
-                echo "fanctl restore: no saved mode (file $STATE_FILE missing)"
-                exit 0
-             fi
-             mode=$(cat "$STATE_FILE" 2>/dev/null || true)
-             case "$mode" in
-                 auto)  auto_cmd ;;
-                 ""|*[!0-9]*)  warn "saved mode '$mode' is not numeric or 'auto'" ;;
-                 *)     pct_cmd "$mode" ;;
-             esac ;;
-    -h|--help) usage; exit 0 ;;
-    *)      if [[ "$CMD" =~ ^[0-9]+$ ]]; then pct_cmd "$CMD"; else usage; exit 1; fi ;;
+    ""|-h|--help|help)  usage; exit 0 ;;
+    -V|--version)       echo "$PROG $VERSION"; exit 0 ;;
+    auto)               auto_cmd ;;
+    max)                pct_cmd 100 ;;
+    half)               pct_cmd 50 ;;
+    set)                [ "$#" -ge 1 ] || die "set: needs <1-100>"; pct_cmd "$1" ;;
+    per-channel)        per_channel_cmd "$@" ;;
+    status)             print_status ;;
+    watch)              interval="${WATCH_INTERVAL:-10}"
+                        crit="${WATCH_CRIT:-85}"
+                        echo "$PROG watch: CPU every ${interval}s, ≥${crit}°C → auto. Ctrl-C to stop."
+                        [ "$DRY_RUN" -eq 1 ] && echo "(dry-run: will not send anything; exits on first excursion)"
+                        while :; do
+                            # max of CPU temp sensors (ignores VR/ambient); tolerates
+                            # both "42 degrees C" and "42 C" / "42h" BMC SDR formats.
+                            temp=$(ipmitool sdr type temperature 2>/dev/null | \
+                                awk '/^[Cc][Pp][Uu][0-9]?[[:space:]]+[Tt]emp/ {
+                                    for (i=1; i<=NF; i++) {
+                                        if (match($i, /^[0-9]+h?$/)) {
+                                            v = substr($i, RSTART, RLENGTH) + 0
+                                            if (v > max) max = v
+                                        }
+                                    }
+                                } END { print max+0 }')
+                            if [ "${temp:-0}" -eq 0 ] 2>/dev/null; then
+                                warn "temp read failed"
+                                if [ "$DRY_RUN" -eq 1 ]; then echo "(dry-run) would hand to auto"; exit 0; fi
+                                warn "handing to auto for safety"
+                                auto_cmd; exit 1
+                            fi
+                            if [ "$temp" -ge "$crit" ]; then
+                                warn "${temp}°C ≥ ${crit}°C"
+                                if [ "$DRY_RUN" -eq 1 ]; then echo "(dry-run) would hand to auto"; exit 0; fi
+                                warn "handing to BMC auto"
+                                auto_cmd; exit 1
+                            fi
+                            sleep "$interval"
+                        done ;;
+    night)              [ -f /etc/systemd/system/quiet-night.timer ] || \
+                            die "systemd units not found — run install.sh first"
+                        systemctl daemon-reload
+                        systemctl enable --now quiet-night.timer loud-day.timer
+                        systemctl start quiet-night
+                        echo "→ Night mode on (NIGHT_PCT=$NIGHT_PCT from $SCHEDULE_FILE)" ;;
+    day)                systemctl disable --now quiet-night.timer loud-day.timer 2>/dev/null || true
+                        systemctl stop quiet-night loud-day 2>/dev/null || true
+                        auto_cmd ;;
+    restore)            if [ ! -f "$STATE_FILE" ]; then
+                          echo "$PROG restore: no saved mode (file $STATE_FILE missing)"
+                          exit 0
+                        fi
+                        mode=$(cat "$STATE_FILE" 2>/dev/null || true)
+                        case "$mode" in
+                            auto)              auto_cmd ;;
+                            ""|*[!0-9]*)       warn "saved mode '$mode' is not numeric or 'auto'" ;;
+                            *)                 pct_cmd "$mode" ;;
+                        esac ;;
+    *)                  if [[ "$CMD" =~ ^[0-9]+$ ]]; then
+                           pct_cmd "$CMD"
+                        else
+                           usage; exit 1
+                        fi ;;
 esac

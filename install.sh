@@ -17,6 +17,10 @@ if ! lsmod | grep -q ipmi_si; then
 fi
 
 echo "Probing BMC for ASRock Rack OEM NetFn (0x3a)..."
+# ponytail: probe sends the auto command (0x00), which hands fans back to BMC
+# even if they were set manually. Most users are already at auto when running
+# install, so this is benign in practice. Replace with a true read-only probe
+# once an ASRock Rack "get fan speed" NetFn is documented.
 probe_out=$(ipmitool raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00 2>&1) || probe_rc=$?
 probe_rc=${probe_rc:-0}
 if [ "$probe_rc" -ne 0 ]; then
@@ -34,34 +38,30 @@ if [ "$probe_rc" -ne 0 ]; then
     echo "  - BMC requires auth:     see TROUBLESHOOTING.md" >&2
     exit 1
 fi
-echo "  OK -- NetFn 0x3a accepted."
+echo "  OK -- NetFn 0x3a accepted (fans reset to BMC auto; this is expected)."
 
+# fanctl binary -> /usr/local/bin
 install -m 755 "$d/fanctl" /usr/local/bin/fanctl
 
-mkdir -p /usr/local/lib/fanctl-systemd/systemd
+# systemd units -> /etc/systemd/system/ (one place, no /usr/local/lib split)
 for f in "$d"/systemd/*; do
     [ -f "$f" ] || continue
-    base=$(basename "$f")
-    case "$base" in
-        fanctl-boot-apply.service)
-            install -m 644 "$f" /etc/systemd/system/ ;;
-        *)
-            install -m 644 "$f" /usr/local/lib/fanctl-systemd/systemd/ ;;
-    esac
+    install -m 644 "$f" /etc/systemd/system/
 done
 
+# state dir
 install -m 755 -d /var/lib/fanctl
 
-cat <<EOF
+# schedule config (only if missing) — single key, sample value
+SCHEDULE_FILE=/etc/default/fanctl
+[ -f "$SCHEDULE_FILE" ] || printf 'NIGHT_PCT=10\n' > "$SCHEDULE_FILE"
+
+cat <<'EOF'
 
 Installed.
-  fanctl:        /usr/local/bin/fanctl
-  schedule:      /usr/local/lib/fanctl-systemd/systemd/  (used by 'fanctl night')
-  boot-restore:  /etc/systemd/system/fanctl-boot-apply.service
-  state dir:     /var/lib/fanctl/   (holds last manual mode across reboots)
 
 Next:
-  fanctl night    # nightly schedule (23:00 -> 10%, 07:00 -> auto)
-  fanctl 10       # set 10% now and persist for boot-restore
+  fanctl 10                    # set 10 percent now
+  fanctl night                 # nightly 23:00 -> 10%, 07:00 -> auto
   systemctl enable --now fanctl-boot-apply.service
 EOF

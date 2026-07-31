@@ -1,5 +1,5 @@
 [Unit]
-Description=Night mode start at 23:00
+Description=Night-mode trigger (23:00) — fans to NIGHT_PCT from /etc/default/fanctl
 
 [Timer]
 OnCalendar=23:00

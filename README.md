@@ -38,25 +38,42 @@ accept this NetFn — stop here, this tool won't help.
 ## One-command setup
 
 ```bash
-sudo ./install.sh          # probes BMC, copies fanctl + units
-fanctl 10                  # set 10%
-fanctl max                 # set 100%
-fanctl half                # set 50%
+sudo ./install.sh          # probes BMC, copies fanctl + units + config
+fanctl 10                  # all fans at 10 percent
+fanctl set 25              # same, more explicit
+fanctl per-channel 10 30 10   # FAN1=10 FAN2=30 FAN3=10, rest 100
+fanctl max                 # 100 percent
+fanctl half                # 50 percent
 fanctl auto                # back to BMC
-fanctl status              # show RPM + temps
+fanctl status              # show RPM + temps as a table
+fanctl -n 10               # dry-run: show what would be sent, don't send
 ```
+
+All speed values are in **percent** (`5`, `10`, `25`, `50`, `100`). Internally
+that becomes a byte the BMC understands; you never see the hex.
 
 `install.sh` verifies the BMC accepts NetFn `0x3a` before installing — exits
 with a clear error if not, so you know up front instead of after rebooting.
+The probe temporarily sets fans to BMC auto; this is the documented behavior
+(see comments in `install.sh`).
 
-### Night mode (23:00 → 10%, 07:00 → auto)
+### Night mode (default 23:00 → 10%, 07:00 → auto)
 
 ```bash
-fanctl night               # 10% at night, auto at 7AM
+fanctl night               # 10 percent at night, auto at 7AM
 fanctl day                 # disable
 ```
 
-Survives reboot. Uses systemd timers, no cron.
+Survives reboot. Uses systemd timers, no cron. Change the night-mode percentage
+without reinstalling:
+
+```bash
+sudo $EDITOR /etc/default/fanctl    # set NIGHT_PCT=15
+sudo systemctl restart quiet-night.service
+```
+
+The schedule **times** (23:00 / 07:00) live in the `.timer` units and stay
+hardcoded; edit those files if you want different times.
 
 ### Boot-time restore (modes lost from BMC RAM on reboot)
 
@@ -68,16 +85,25 @@ After enabling, the last manual mode (`fanctl 10`, `fanctl night`, etc.) is
 re-applied automatically after every boot. State lives in
 `/var/lib/fanctl/mode`. `fanctl day` clears it.
 
+### Watchdog (safety net for unattended low-fan use)
+
+```bash
+fanctl watch               # poll CPU every 10s, hand to BMC auto at ≥85°C
+WATCH_INTERVAL=5 WATCH_CRIT=80 fanctl watch
+```
+
+If `watch` itself fails to read the temperature, it also reverts to auto.
+
 ## ⚠️ Safety
 
 - Manual mode **does not ramp up under load**. Set 10% as the floor, walk
   away from it.
-- For unattended low-fan use, run `fanctl watch` alongside. It polls CPU
-  temp via IPMI every 10s and reverts to BMC auto at ≥85°C. Thresholds
-  overridable via `WATCH_INTERVAL`, `WATCH_CRIT`. If `watch` itself
-  fails to read temperature, it also reverts to auto.
-- Don't run on a hot day with poor ventilation. CPU thermal throttling is
-  your friend; fan failure is not.
+- For unattended low-fan use, run `fanctl watch` alongside. Polls CPU temp via
+  IPMI every 10s and reverts to BMC auto at ≥85°C. Thresholds overridable via
+  `WATCH_INTERVAL`, `WATCH_CRIT`. If `watch` itself fails to read temperature,
+  it also reverts to auto.
+- Don't run on a hot day with poor ventilation. CPU thermal throttling is your
+  friend; fan failure is not.
 - This is OEM undocumented territory — use at your own risk.
 
 ## Having issues?
@@ -87,10 +113,11 @@ kernel module issues, `Invalid command` errors, and other common pitfalls.
 
 ## Going further
 
-| File | What it does |
-|------|-------------|
-| [`examples/temp-monitor.sh`](examples/temp-monitor.sh) | Auto-adjusts fans by CPU temp, with hysteresis |
-| [`examples/per-channel.sh`](examples/per-channel.sh) | Different speeds per fan |
+| File | What it does | When to use |
+|------|-------------|-------------|
+| [`examples/temp-monitor.sh`](examples/temp-monitor.sh) | Auto-adjusts fans by CPU temp, with hysteresis | Cron / standalone, no install needed |
+| `fanctl per-channel <p0> ... <p7>` | Different speeds per fan | Installed path |
+| `fanctl -n <cmd>` | Show what `ipmitool` would be invoked with | Testing config before committing |
 
 `temp-monitor.sh` ramps `10 → 20 → 40 → auto` at 45/55/65°C and includes
 hysteresis (5°C) to avoid oscillating at thresholds. State file:

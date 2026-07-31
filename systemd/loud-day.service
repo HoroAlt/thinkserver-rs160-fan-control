@@ -1,7 +1,7 @@
 [Unit]
-Description=Restore automatic fan control (day mode)
+Description=fanctl: restore automatic fan control on day-mode start
 
 [Service]
 Type=oneshot
-ExecStart=ipmitool raw 0x3a 0x01 0x00 0x00 0x00 0x00 0x00 0x00 0x00 0x00
+ExecStart=/usr/local/bin/fanctl auto
 RemainAfterExit=yes

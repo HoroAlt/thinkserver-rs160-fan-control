@@ -60,11 +60,45 @@ silently installing a tool that won't work.
 
 ## `fanctl night` says `systemd units not found — run install.sh first`
 
-You ran `fanctl night` before `install.sh`. Either:
+You ran `fanctl night` from a path that has no `systemd/` directory next to
+it (for example, a moved or symlinked copy of `fanctl`). Either:
 
 - Run `./install.sh` once from the cloned repo directory, or
-- Run `fanctl night` from the cloned repo directory directly (it auto-detects
-  `systemd/` relative to itself).
+- Run `fanctl night` from the cloned repo directory directly.
+
+## `fanctl set 25` says `1–100 only (use 'auto' for BMC control)`
+
+You passed an out-of-range or non-integer value to `fanctl set`/`fanctl <N>`.
+The BMC byte is 0 (auto) or 1..100 (percent). `fanctl 0` is rejected to stop
+you from accidentally erasing state; use `fanctl auto` instead.
+
+## I want to change the night-mode schedule, not just the percentage
+
+`/etc/default/fanctl` controls the *percentage* (`NIGHT_PCT`). To change
+the *times* (the default 23:00 / 07:00), edit the timer units:
+
+```bash
+sudo systemctl edit quiet-night.timer   # follow systemd drop-in syntax
+sudo systemctl edit loud-day.timer
+```
+
+Or just rewrite `OnCalendar=` directly:
+
+```bash
+sudo sed -i 's/^OnCalendar=.*/OnCalendar=22:30/' /etc/systemd/system/quiet-night.timer
+sudo systemctl daemon-reload
+sudo systemctl restart quiet-night.timer
+```
+
+## `fanctl -n 10` (dry-run) still seems to change fan state
+
+`--dry-run` never executes the BMC command. If you see RPM change after a
+dry-run, something else (cron, a watch loop, boot-restore) is doing it.
+
+## `fanctl per-channel` complains that 0 is "not a number" or out of range
+
+`0` is valid: it means "auto for that channel". Make sure you're passing
+numeric ASCII (`0 0 0 0 0 0 0 0`), not hex (`0x00`).
 
 ## `fanctl status` shows no fans or temps
 

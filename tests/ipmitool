@@ -1,0 +1,34 @@
+#!/bin/bash
+# Stub ipmitool for the smoke test. Records every call to FANCTL_STUB_LOG and
+# returns canned SDR data shaped like a real BMC, without touching hardware.
+set -e
+log="${FANCTL_STUB_LOG:-/tmp/fanctl-stub.log}"
+printf '%s\n' "$*" >> "$log"
+case "$1" in
+    raw)
+        if [ "$2" = "0x3a" ] && [ "$3" = "0x01" ]; then exit 0; fi
+        if [ "$2" = "0x3a" ] && [ "$3" = "0xff" ]; then echo "Invalid command" >&2; exit 1; fi
+        exit 0
+        ;;
+    sdr)
+        if [ "$2" = "type" ] && [ "$3" = "temperature" ]; then
+            cat <<'INNER'
+CPU1 Temp        | 42 degrees C      | ok
+CPU2 Temp        | 45h degrees C     | ok
+VR1 Temp         | 60 degrees C      | ok
+INNER
+            exit 0
+        fi
+        if [ "$2" = "list" ]; then
+            cat <<'INNER'
+FAN1             | 3100 RPM          | ok
+FAN2             | 3050 RPM          | ok
+FAN3             | 3000 RPM          | ok
+INNER
+            exit 0
+        fi
+        ;;
+    sensor) echo "(stub) sensor $*"; exit 0 ;;
+    *)      echo "(stub) $*" >&2; exit 0 ;;
+esac
+exit 0

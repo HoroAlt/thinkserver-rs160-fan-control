@@ -1,7 +1,8 @@
 [Unit]
-Description=Set fans to 10% (night mode)
+Description=fanctl: set fans to NIGHT_PCT on night-mode start (default 10 percent)
 
 [Service]
 Type=oneshot
-ExecStart=ipmitool raw 0x3a 0x01 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a
+EnvironmentFile=/etc/default/fanctl
+ExecStart=/usr/local/bin/fanctl set ${NIGHT_PCT}
 RemainAfterExit=yes
