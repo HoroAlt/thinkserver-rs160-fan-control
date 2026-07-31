@@ -19,13 +19,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: install shellcheck
+        # Static release binary from upstream — no apt dependency, no universe-repo
+        # dependency, deterministic version across runners. apt-get in GH Actions
+        # Ubuntu runners has historically been flaky (universe disabled, mirror
+        # timeouts) and gives little benefit over a single-binary install here.
+        run: |
+          set -e
+          ver=v0.11.0
+          curl -sSL "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.x86_64.tar.xz" \
+            | tar -xJ
+          sudo install -m 755 "shellcheck-${ver}/shellcheck" /usr/local/bin/
+          shellcheck --version | head -1
       - name: shellcheck
         run: |
           set -e
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-          # fanctl + install.sh are sourced from each other (fanctl uses ipmitool,
-          # install.sh uses find/lsmod), so follow sources with -x.
+          # fanctl + install.sh are sourced from each other (fanctl runs ipmitool,
+          # install.sh runs find/lsmod), so follow sources with -x.
           shellcheck -x fanctl install.sh
           # examples/ is intentionally standalone and may diverge from fanctl's
           # protocol bytes; not part of the package contract.
