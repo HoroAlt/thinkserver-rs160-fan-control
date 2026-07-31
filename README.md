@@ -26,6 +26,27 @@ The fix uses an undocumented ASRock Rack OEM NetFn (`0x3a`) that the ThinkServer
 TMM firmware accepts. Lenovo doesn't publish it; ASRock Rack's own
 [FAQ](https://www.asrockrack.com/support/faq.asp?k=ipmitool) does.
 
+## Compatibility
+
+This project has been tested on **Proxmox VE + Lenovo ThinkServer RS160**
+(BMC firmware 1.36 / 2.50 / 3.20). It works there.
+
+The fan-control mechanism is an undocumented ASRock Rack OEM NetFn (`0x3a`)
+that Lenovo's ThinkServer TMM firmware happens to accept. Other BMCs and
+distributions are not officially tested — they may work the same way or they
+may not, since the protocol isn't published and behavior on different firmware
+isn't guaranteed.
+
+- **Proxmox VE + ThinkServer RS160, `install.sh` failing?** See
+  [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+- **Different hardware or hypervisor?** Treat this as fix-it-yourself. The
+  protocol bytes are visible in `fanctl`, the install steps assume a
+  Debian/Ubuntu layout with systemd, and the common BMC-side gotchas are
+  listed in [TROUBLESHOOTING.md](TROUBLESHOOTING.md). Patches and PRs that
+  add support for other distributions or BMC firmware versions are welcome.
+- **Porting to something else?** Start from the ASRock Rack command reference
+  at <https://www.asrockrack.com/support/faq.asp?k=ipmitool>.
+
 ## Quick check
 
 ```bash

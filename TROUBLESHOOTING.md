@@ -1,5 +1,11 @@
 # Troubleshooting
 
+> **Compatibility:** this document assumes Proxmox VE + Lenovo
+> ThinkServer RS160. If you're on different hardware and none of the
+> steps below match your situation, the protocol bytes are visible in
+> `fanctl` and the [Compatibility section in the README](README.md#compatibility)
+> has pointers for porting.
+
 If `fanctl` isn't working, walk through these in order. Each entry has the
 error message you'll see and what to do about it.
 
