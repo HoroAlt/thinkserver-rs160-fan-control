@@ -56,33 +56,64 @@ sudo ipmitool raw 0x3a 0x01 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a 0x0a
 Fans should drop to ~3000 RPM. If you see `Invalid command`, your BMC doesn't
 accept this NetFn — stop here, this tool won't help.
 
-## One-command setup
+## Install
+
+Get on your Proxmox VE host (e.g. over SSH as `root`) and run the four
+blocks below. Each block is small; copy-paste them one at a time if you'd
+rather see what's happening.
 
 ```bash
-sudo ./install.sh          # probes BMC, copies fanctl + units + config
-fanctl 10                  # all fans at 10 percent
-fanctl set 25              # same, more explicit
-fanctl per-channel 10 30 10   # FAN1=10 FAN2=30 FAN3=10, rest 100
-fanctl max                 # 100 percent
-fanctl half                # 50 percent
-fanctl auto                # back to BMC
-fanctl status              # show RPM + temps as a table
-fanctl -n 10               # dry-run: show what would be sent, don't send
+# 1. Prereqs — ipmitool (talks to BMC) and git (clones this repo). On
+#    Proxmox VE / Debian / Ubuntu both are usually already installed.
+sudo apt update
+sudo apt install -y ipmitool git
+
+# Kernel modules for the BMC interface — not always auto-loaded on a fresh
+# install. Loading them now means `install.sh` and `fanctl` can actually
+# talk to /dev/ipmi0 immediately.
+sudo modprobe ipmi_si ipmi_devintf
+# Persist across reboots:
+echo -e "ipmi_si\nipmi_devintf" | sudo tee /etc/modules-load.d/ipmi.conf
+
+# 2. Clone this repo. HTTPS is fine; SSH works if you have a GitHub key
+#    in root's agent (rare on a server, so HTTPS is the default here).
+git clone https://github.com/HoroAlt/thinkserver-rs160-fan-control.git
+cd thinkserver-rs160-fan-control
+
+# 3. Install. Probes the BMC, exits with a clear error if NetFn 0x3a
+#    isn't accepted (so you find out before rebooting, not after).
+sudo ./install.sh
+
+# 4. Try it.
+sudo fanctl 10         # all fans to 10%
+sudo fanctl status     # show RPM + temps
 ```
 
-All speed values are in **percent** (`5`, `10`, `25`, `50`, `100`). Internally
-that becomes a byte the BMC understands; you never see the hex.
+After install, `fanctl`, the systemd units, and `/etc/default/fanctl`
+are on the system — see [What got installed](#what-got-installed) below for
+where things live.
 
-`install.sh` verifies the BMC accepts NetFn `0x3a` before installing — exits
-with a clear error if not, so you know up front instead of after rebooting.
-The probe temporarily sets fans to BMC auto; this is the documented behavior
-(see comments in `install.sh`).
+On non-Debian systems (`dnf install ipmitool git-core`, `pacman -S
+ipmitool git`, …), replace block 1 accordingly; the rest of the flow
+assumes a Debian/Ubuntu layout with systemd and may need local porting —
+see [Compatibility](#compatibility).
+
+### What got installed
+
+| Path | What it is |
+|------|-----------|
+| `/usr/local/bin/fanctl` | The CLI itself |
+| `/etc/systemd/system/fanctl-boot-apply.service` | Re-applies the last manual mode after reboot |
+| `/etc/systemd/system/quiet-night.{service,timer}` | Runs `fanctl set ${NIGHT_PCT}` at 23:00 (after `fanctl night`) |
+| `/etc/systemd/system/loud-day.{service,timer}` | Runs `fanctl auto` at 07:00 (after `fanctl night`) |
+| `/etc/default/fanctl` | `NIGHT_PCT=10` — change this file to set the night-mode fan speed |
+| `/var/lib/fanctl/mode` | State file, written on every non-dry-run set/auto; read by boot-restore |
 
 ### Night mode (default 23:00 → 10%, 07:00 → auto)
 
 ```bash
-fanctl night               # 10 percent at night, auto at 7AM
-fanctl day                 # disable
+sudo fanctl night               # 10 percent at night, auto at 7AM
+sudo fanctl day                 # disable
 ```
 
 Survives reboot. Uses systemd timers, no cron. Change the night-mode percentage
@@ -105,6 +136,27 @@ sudo systemctl enable --now fanctl-boot-apply.service
 After enabling, the last manual mode (`fanctl 10`, `fanctl night`, etc.) is
 re-applied automatically after every boot. State lives in
 `/var/lib/fanctl/mode`. `fanctl day` clears it.
+
+### Day-to-day use
+
+All speed values are in **percent** (`5`, `10`, `25`, `50`, `100`); internally
+that becomes a byte the BMC understands — you never see the hex.
+
+```bash
+sudo fanctl 10                  # all fans at 10 percent
+sudo fanctl set 25              # same, more explicit
+sudo fanctl per-channel 10 30 10    # FAN1=10 FAN2=30 FAN3=10, rest 100
+sudo fanctl max                 # 100 percent
+sudo fanctl half                # 50 percent
+sudo fanctl auto                # hand control back to BMC
+sudo fanctl status              # show RPM + temps as a table
+sudo fanctl -n 10               # dry-run: show what would be sent, no BMC traffic
+```
+
+`install.sh` verifies the BMC accepts NetFn `0x3a` before installing — exits
+with a clear error if not, so you know up front instead of after rebooting.
+The probe temporarily sets fans to BMC auto; this is the documented behavior
+(see comments in `install.sh`).
 
 ### Watchdog (safety net for unattended low-fan use)
 
